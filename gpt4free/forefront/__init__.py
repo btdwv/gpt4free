@@ -1,3 +1,5 @@
+import os
+import pickle
 from json import loads
 from re import findall
 from time import time, sleep
@@ -5,16 +7,37 @@ from typing import Generator, Optional
 from uuid import uuid4
 
 from fake_useragent import UserAgent
-from requests import post
 from pymailtm import MailTm, Message
+from requests import post
 from tls_client import Session
 
 from .typing import ForeFrontResponse
 
 
 class Account:
+    COOKIES_FILE_NAME = 'cookies.pickle'
+
     @staticmethod
-    def create(proxy: Optional[str] = None, logging: bool = False):
+    def login(proxy: Optional[str] = None, logging: bool = False) -> str:
+        if not os.path.isfile(Account.COOKIES_FILE_NAME):
+            return Account.create(proxy, logging)
+
+        with open(Account.COOKIES_FILE_NAME, 'rb') as f:
+            cookies = pickle.load(f)
+        proxies = {'http': 'http://' + proxy, 'https': 'http://' + proxy} if proxy else False
+
+        client = Session(client_identifier='chrome110')
+        client.proxies = proxies
+        client.cookies.update(cookies)
+
+        if Account.is_cookie_enabled(client):
+            response = client.get('https://clerk.forefront.ai/v1/client?_clerk_js_version=4.38.4')
+            return response.json()['response']['sessions'][0]['last_active_token']['jwt']
+        else:
+            return Account.create(proxy, logging)
+
+    @staticmethod
+    def create(proxy: Optional[str] = None, logging: bool = False, save_cookies: bool = False) -> str:
         proxies = {'http': 'http://' + proxy, 'https': 'http://' + proxy} if proxy else False
 
         start = time()
@@ -43,10 +66,7 @@ class Account:
 
         response = client.post(
             f'https://clerk.forefront.ai/v1/client/sign_ups/{trace_token}/prepare_verification?_clerk_js_version=4.38.4',
-            data={
-                'strategy': 'email_link',
-                'redirect_url': 'https://accounts.forefront.ai/sign-up/verify'
-            },
+            data={'strategy': 'email_link', 'redirect_url': 'https://accounts.forefront.ai/sign-up/verify'},
         )
 
         if logging:
@@ -75,6 +95,10 @@ class Account:
 
         token = response.json()['response']['sessions'][0]['last_active_token']['jwt']
 
+        if save_cookies:
+            with open(Account.COOKIES_FILE_NAME, 'wb') as f:
+                pickle.dump(client.cookies, f)
+
         with open('accounts.txt', 'a') as f:
             f.write(f'{mail_address}:{token}\n')
 
@@ -82,6 +106,11 @@ class Account:
             print(time() - start)
 
         return token
+
+    @staticmethod
+    def is_cookie_enabled(client: Session) -> bool:
+        response = client.get('https://chat.forefront.ai/')
+        return 'window.startClerk' in response.text
 
 
 class StreamingCompletion:
@@ -93,14 +122,14 @@ class StreamingCompletion:
         action_type='new',
         default_persona='607e41fe-95be-497e-8e97-010a59b2e2c0',  # default
         model='gpt-4',
-        proxy=None
+        proxy=None,
     ) -> Generator[ForeFrontResponse, None, None]:
         if not token:
             raise Exception('Token is required!')
         if not chat_id:
             chat_id = str(uuid4())
 
-        proxies = { 'http': 'http://' + proxy, 'https': 'http://' + proxy } if proxy else None
+        proxies = {'http': 'http://' + proxy, 'https': 'http://' + proxy} if proxy else None
 
         headers = {
             'authority': 'chat-server.tenant-forefront-default.knative.chi.coreweave.com',
@@ -168,7 +197,7 @@ class Completion:
         action_type='new',
         default_persona='607e41fe-95be-497e-8e97-010a59b2e2c0',  # default
         model='gpt-4',
-        proxy=None
+        proxy=None,
     ) -> ForeFrontResponse:
         text = ''
         final_response = None
@@ -179,7 +208,7 @@ class Completion:
             action_type=action_type,
             default_persona=default_persona,
             model=model,
-            proxy=proxy
+            proxy=proxy,
         ):
             if response:
                 final_response = response
@@ -191,4 +220,3 @@ class Completion:
             raise Exception('Unable to get the response, Please try again')
 
         return final_response
-	
