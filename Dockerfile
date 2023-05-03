@@ -1,6 +1,6 @@
 FROM python:3.10
 
-RUN apt-get update && apt-get install -y git
+RUN apt-get update && apt-get install -y git ffmpeg
 
 RUN mkdir -p /usr/src/gpt4free
 WORKDIR /usr/src/gpt4free
